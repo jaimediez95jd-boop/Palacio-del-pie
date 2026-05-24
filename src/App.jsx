@@ -29,6 +29,7 @@ const CIRUGIAS_GRUPOS = {
 
 const ESTADOS = ["Pendiente fecha","Programado","Operado","Alta"];
 const USUARIOS = [
+  { nombre: "Dr. Contreras", icono: "👨‍⚕️" },
   { nombre: "Dr. Díez Saralegui", icono: "👨‍⚕️" },
   { nombre: "Dra. Jiménez", icono: "👩‍⚕️" },
   { nombre: "Irene", icono: "🗂️" },
