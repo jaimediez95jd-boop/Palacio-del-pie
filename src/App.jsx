@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { db } from "./firebase.js";
-import {
-  collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, serverTimestamp, query, orderBy
-} from "firebase/firestore";
 
-// ── Datos ─────────────────────────────────────────────────────────────────────
+// ── Contraseña de acceso ──────────────────────────────────────────────────────
+const ACCESS_PASSWORD = "palaciodelpie";
+
+const STORAGE_KEY = "palaciodelpie-v1";
+
 const CIRUGIAS_GRUPOS = {
   "Hallux": [
     "Hallux valgus (osteotomía chevron)",
@@ -94,18 +93,27 @@ const initialForm = {
   nombre: "", apellidos: "", numHistoria: "", edad: "",
   telefono: "", email: "", cirugia: "", codigoCirugia: "",
   fechaCirugia: "", estado: "Pendiente fecha", pagado: false,
-  montoPagado: "", montoTotal: "", notas: "", creadoPor: "",
+  montoPagado: "", montoTotal: "", notas: "",
+  creadoPor: "", fechaCreacion: new Date().toISOString(),
   adjuntos: [],
 };
+
+const generateId = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
 
 const formatDate = (iso) => {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" });
 };
 
-const generateId = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
+function loadFromStorage() {
+  try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : []; }
+  catch { return []; }
+}
 
-// ── AI extraction ─────────────────────────────────────────────────────────────
+function saveToStorage(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+}
+
 async function extractFromImage(base64Data, mediaType) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -117,31 +125,25 @@ async function extractFromImage(base64Data, mediaType) {
         role: "user",
         content: [
           { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } },
-          {
-            type: "text",
-            text: `Analiza esta imagen de una historia clínica hospitalaria española. Extrae estos datos si los ves claramente:
+          { type: "text", text: `Analiza esta imagen de una historia clínica hospitalaria española. Extrae estos datos si los ves claramente:
 - nombre: solo nombre de pila
-- apellidos: uno o dos apellidos  
+- apellidos: uno o dos apellidos
 - numHistoria: número de historia clínica / NHC (solo dígitos)
 - edad: edad en años (solo número)
-- telefono: teléfono (solo dígitos)
+- telefono: teléfono de contacto (solo dígitos)
 - email: correo electrónico
-
-Devuelve SOLO un JSON válido sin explicaciones ni markdown. Campos no encontrados deja como "".
-Formato: {"nombre":"","apellidos":"","numHistoria":"","edad":"","telefono":"","email":""}`
-          }
+Devuelve SOLO un JSON válido, sin explicaciones ni markdown. Campos no encontrados deja como "".
+Formato: {"nombre":"","apellidos":"","numHistoria":"","edad":"","telefono":"","email":""}` }
         ]
       }]
     })
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err?.error?.message || `HTTP ${res.status}`); }
   const data = await res.json();
-  const raw = (data.content || []).map(b => b.text || "").join("").trim()
-    .replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
-  return JSON.parse(raw);
+  const raw = (data.content || []).map(b => b.text || "").join("").trim();
+  return JSON.parse(raw.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim());
 }
 
-// ── CSV export ────────────────────────────────────────────────────────────────
 function exportCSV(pacientes) {
   const headers = ["Nombre","Apellidos","Nº Historia","Edad","Teléfono","Email","Cirugía","Código","Fecha Cirugía","Estado","Pagado","Total (€)","Pagado (€)","Cirujano","Notas"];
   const rows = pacientes.map(p => [
@@ -150,19 +152,21 @@ function exportCSV(pacientes) {
     p.estado, p.pagado ? "Sí" : "No", p.montoTotal, p.montoPagado, p.creadoPor,
     (p.notas || "").replace(/\n/g, " ")
   ]);
-  const csv = [headers, ...rows]
-    .map(r => r.map(c => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const csv = [headers, ...rows].map(r => r.map(c => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = `palacio-del-pie-${new Date().toISOString().slice(0,10)}.csv`;
-  a.click(); URL.revokeObjectURL(url);
+  const a = document.createElement("a"); a.href = url; a.download = `palacio-del-pie-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [pacientes, setPacientes] = useState([]);
+  const [autenticado, setAutenticado] = useState(() => sessionStorage.getItem("pdp-auth") === "1");
+  const [password, setPassword] = useState("");
+  const [passwordError, setPasswordError] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const [pacientes, setPacientes] = useState(() => loadFromStorage());
   const [vista, setVista] = useState("lista");
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState(initialForm);
@@ -171,7 +175,6 @@ export default function App() {
   const [filtroPago, setFiltroPago] = useState("todos");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [filtroCirujano, setFiltroCirujano] = useState("todos");
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -181,166 +184,123 @@ export default function App() {
   const scanRef = useRef();
   const adjuntoRef = useRef();
 
-  // ── Firestore real-time listener ──────────────────────────────────────────
   useEffect(() => {
-    const q = query(collection(db, "pacientes"), orderBy("fechaCreacion", "desc"));
-    const unsub = onSnapshot(q, (snap) => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setPacientes(data);
-      setLoading(false);
-    }, (err) => {
-      console.error("Firestore error:", err);
-      setLoading(false);
-    });
-    return () => unsub();
+    const handler = (e) => {
+      if (e.key === STORAGE_KEY && e.newValue) {
+        try { setPacientes(JSON.parse(e.newValue)); } catch {}
+      }
+    };
+    window.addEventListener("storage", handler);
+    return () => window.removeEventListener("storage", handler);
   }, []);
 
-  function showToast(msg, type = "ok") {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 4000);
+  function handlePasswordSubmit() {
+    if (password === ACCESS_PASSWORD) {
+      sessionStorage.setItem("pdp-auth", "1");
+      setAutenticado(true);
+      setPasswordError(false);
+    } else {
+      setPasswordError(true);
+      setPassword("");
+    }
+  }
+
+  function handlePasswordKey(e) {
+    if (e.key === "Enter") handlePasswordSubmit();
+  }
+
+  function persistir(data) {
+    setSaving(true); saveToStorage(data); setTimeout(() => setSaving(false), 400);
   }
 
   function setUsuarioAndSave(nombre) {
-    sessionStorage.setItem("pdp-usuario", nombre);
-    setUsuario(nombre);
+    sessionStorage.setItem("pdp-usuario", nombre); setUsuario(nombre);
+  }
+
+  function showToast(msg, type = "ok") {
+    setToast({ msg, type }); setTimeout(() => setToast(null), 4000);
   }
 
   function handleNuevo() {
     setForm({ ...initialForm, adjuntos: [], creadoPor: usuario });
-    setScanPreview(null); setScanState("idle"); setScanError("");
-    setVista("nuevo");
+    setScanPreview(null); setScanState("idle"); setScanError(""); setVista("nuevo");
   }
 
   function handleEditar(p) {
-    setForm({ ...p, adjuntos: p.adjuntos || [] });
-    setSelected(p);
-    setScanPreview(null); setScanState("idle"); setScanError("");
-    setVista("editar");
+    setForm({ ...p, adjuntos: p.adjuntos || [] }); setSelected(p);
+    setScanPreview(null); setScanState("idle"); setScanError(""); setVista("editar");
   }
 
   function handleVer(p) { setSelected(p); setVista("detalle"); }
 
-  async function handleGuardar() {
-    if (!form.nombre?.trim() || !form.apellidos?.trim()) {
-      showToast("Nombre y apellidos son obligatorios", "error"); return;
-    }
+  function handleGuardar() {
+    if (!form.nombre?.trim() || !form.apellidos?.trim()) { showToast("Nombre y apellidos son obligatorios", "error"); return; }
     if (!form.cirugia) { showToast("Selecciona el tipo de cirugía", "error"); return; }
-
-    setSaving(true);
-    try {
-      const { id, ...datos } = form;
-      const payload = { ...datos, fechaCreacion: datos.fechaCreacion || new Date().toISOString(), updatedAt: new Date().toISOString() };
-
-      if (vista === "nuevo") {
-        await addDoc(collection(db, "pacientes"), payload);
-        showToast("Paciente añadido ✓");
-      } else {
-        await updateDoc(doc(db, "pacientes", form.id), payload);
-        showToast("Paciente actualizado ✓");
-      }
-      setVista("lista");
-    } catch (e) {
-      showToast("Error al guardar: " + e.message, "error");
+    let nuevos;
+    if (vista === "nuevo") {
+      nuevos = [{ ...form, id: generateId(), fechaCreacion: new Date().toISOString() }, ...pacientes];
+      showToast("Paciente añadido ✓");
+    } else {
+      nuevos = pacientes.map(p => p.id === form.id ? { ...form } : p);
+      showToast("Paciente actualizado ✓");
     }
-    setSaving(false);
+    setPacientes(nuevos); persistir(nuevos); setVista("lista");
   }
 
-  async function handleDelete(id) {
-    try {
-      await deleteDoc(doc(db, "pacientes", id));
-      showToast("Paciente eliminado");
-    } catch (e) {
-      showToast("Error al eliminar", "error");
-    }
-    setConfirmDelete(null); setVista("lista");
+  function handleDelete(id) {
+    const nuevos = pacientes.filter(p => p.id !== id);
+    setPacientes(nuevos); persistir(nuevos);
+    setConfirmDelete(null); setVista("lista"); showToast("Paciente eliminado");
   }
 
-  async function togglePago(p) {
-    try {
-      await updateDoc(doc(db, "pacientes", p.id), { pagado: !p.pagado, updatedAt: new Date().toISOString() });
-      showToast(!p.pagado ? "Marcado como pagado ✓" : "Marcado como pendiente");
-    } catch { showToast("Error al actualizar", "error"); }
+  function togglePago(p) {
+    const updated = pacientes.map(x => x.id === p.id ? { ...x, pagado: !x.pagado } : x);
+    setPacientes(updated); persistir(updated);
+    showToast(!p.pagado ? "Marcado como pagado ✓" : "Marcado como pendiente");
   }
 
-  // ── SCAN ──────────────────────────────────────────────────────────────────
   function handleScanClick() { scanRef.current?.click(); }
 
   async function handleScanFile(e) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
+    const file = e.target.files?.[0]; e.target.value = "";
     if (!file) return;
-    if (!["image/jpeg","image/png","image/webp","image/gif"].includes(file.type)) {
-      showToast("Formato no válido. Usa JPG, PNG o WEBP", "error"); return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      showToast("Imagen demasiado grande (máx. 5 MB)", "error"); return;
-    }
+    if (!["image/jpeg","image/png","image/webp","image/gif"].includes(file.type)) { showToast("Usa JPG, PNG o WEBP", "error"); return; }
+    if (file.size > 5 * 1024 * 1024) { showToast("Imagen demasiado grande (máx. 5 MB)", "error"); return; }
     setScanState("loading"); setScanError(""); setScanPreview(null);
     try {
       const dataUrl = await readFileAsDataURL(file);
       setScanPreview(dataUrl);
-      const base64 = dataUrl.split(",")[1];
-      const extracted = await extractFromImage(base64, file.type);
+      const extracted = await extractFromImage(dataUrl.split(",")[1], file.type);
       let filled = 0;
       setForm(prev => {
-        const updated = { ...prev };
-        ["nombre","apellidos","numHistoria","edad","telefono","email"].forEach(k => {
-          if (extracted[k] && !prev[k]) { updated[k] = extracted[k]; filled++; }
-        });
-        return updated;
+        const u = { ...prev };
+        ["nombre","apellidos","numHistoria","edad","telefono","email"].forEach(k => { if (extracted[k] && !prev[k]) { u[k] = extracted[k]; filled++; } });
+        return u;
       });
-      if (filled === 0) {
-        setScanState("error");
-        setScanError("No se detectaron datos. Rellena el formulario manualmente.");
-      } else {
-        setScanState("done");
-        showToast(`${filled} campos extraídos ✓ — revisa y completa`);
-      }
-    } catch (err) {
-      setScanState("error");
-      setScanError("Error al analizar la imagen. Rellena manualmente.");
-    }
+      if (filled === 0) { setScanState("error"); setScanError("No se detectaron datos. Rellena manualmente."); }
+      else { setScanState("done"); showToast(`${filled} campos extraídos ✓`); }
+    } catch (err) { setScanState("error"); setScanError(`Error: ${err.message || "inténtalo de nuevo"}`); }
   }
 
-  // ── ADJUNTOS ──────────────────────────────────────────────────────────────
   function handleAdjuntoClick() { adjuntoRef.current?.click(); }
 
   async function handleAdjuntoFile(e) {
-    const files = Array.from(e.target.files || []);
-    e.target.value = "";
+    const files = Array.from(e.target.files || []); e.target.value = "";
     const nuevos = [];
     for (const file of files) {
       if (file.size > 8 * 1024 * 1024) { showToast(`${file.name} supera 8 MB`, "error"); continue; }
-      try {
-        const dataUrl = await readFileAsDataURL(file);
-        nuevos.push({ id: generateId(), nombre: file.name, tipo: file.type, dataUrl, fecha: new Date().toISOString() });
-      } catch { showToast(`Error leyendo ${file.name}`, "error"); }
+      try { nuevos.push({ id: generateId(), nombre: file.name, tipo: file.type, dataUrl: await readFileAsDataURL(file), fecha: new Date().toISOString() }); }
+      catch { showToast(`Error leyendo ${file.name}`, "error"); }
     }
-    if (nuevos.length) {
-      setForm(prev => ({ ...prev, adjuntos: [...(prev.adjuntos || []), ...nuevos] }));
-      showToast(`${nuevos.length} archivo(s) adjuntado(s) ✓`);
-    }
+    if (nuevos.length) { setForm(prev => ({ ...prev, adjuntos: [...(prev.adjuntos || []), ...nuevos] })); showToast(`${nuevos.length} archivo(s) adjuntado(s) ✓`); }
   }
 
-  function removeAdjunto(id) {
-    setForm(prev => ({ ...prev, adjuntos: prev.adjuntos.filter(a => a.id !== id) }));
-  }
-
-  function downloadAdjunto(adj) {
-    const a = document.createElement("a");
-    a.href = adj.dataUrl; a.download = adj.nombre; a.click();
-  }
-
+  function removeAdjunto(id) { setForm(prev => ({ ...prev, adjuntos: prev.adjuntos.filter(a => a.id !== id) })); }
+  function downloadAdjunto(adj) { const a = document.createElement("a"); a.href = adj.dataUrl; a.download = adj.nombre; a.click(); }
   function readFileAsDataURL(file) {
-    return new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload = ev => res(ev.target.result);
-      r.onerror = () => rej(new Error("Error leyendo archivo"));
-      r.readAsDataURL(file);
-    });
+    return new Promise((res, rej) => { const r = new FileReader(); r.onload = ev => res(ev.target.result); r.onerror = () => rej(new Error("Error leyendo")); r.readAsDataURL(file); });
   }
 
-  // ── FILTROS ───────────────────────────────────────────────────────────────
   const filtrados = pacientes.filter(p => {
     const txt = `${p.nombre} ${p.apellidos} ${p.numHistoria} ${p.codigoCirugia} ${p.cirugia}`.toLowerCase();
     return txt.includes(filtro.toLowerCase())
@@ -356,7 +316,39 @@ export default function App() {
     pendientesPago: pacientes.filter(p => !p.pagado).length,
   };
 
-  // ── LOGIN ─────────────────────────────────────────────────────────────────
+  // ── PANTALLA DE CONTRASEÑA ────────────────────────────────────────────────
+  if (!autenticado) return (
+    <div style={S.loginWrap}>
+      <div style={S.loginCard}>
+        <div style={S.brand2}>
+          <span style={S.brandFoot}>🦶</span>
+          <div>
+            <div style={S.brandTitle}>Palacio del Pie</div>
+            <div style={S.brandSub}>Gestión quirúrgica</div>
+          </div>
+        </div>
+        <p style={S.loginLabel}>Introduce la contraseña</p>
+        <div style={S.passwordWrap}>
+          <input
+            style={{ ...S.passwordInput, borderColor: passwordError ? "#ef4444" : "#e2e8f0" }}
+            type={showPassword ? "text" : "password"}
+            value={password}
+            onChange={e => { setPassword(e.target.value); setPasswordError(false); }}
+            onKeyDown={handlePasswordKey}
+            placeholder="Contraseña..."
+            autoFocus
+          />
+          <button style={S.eyeBtn} onClick={() => setShowPassword(v => !v)} title={showPassword ? "Ocultar" : "Mostrar"}>
+            {showPassword ? "🙈" : "👁"}
+          </button>
+        </div>
+        {passwordError && <div style={S.passwordError}>Contraseña incorrecta</div>}
+        <button style={S.btnAcceder} onClick={handlePasswordSubmit}>Acceder</button>
+      </div>
+    </div>
+  );
+
+  // ── PANTALLA DE USUARIO ───────────────────────────────────────────────────
   if (!usuario) return (
     <div style={S.loginWrap}>
       <div style={S.loginCard}>
@@ -376,14 +368,10 @@ export default function App() {
             </button>
           ))}
         </div>
+        <button style={S.btnSalirPass} onClick={() => { sessionStorage.removeItem("pdp-auth"); setAutenticado(false); }}>
+          ← Cambiar contraseña
+        </button>
       </div>
-    </div>
-  );
-
-  if (loading) return (
-    <div style={S.loadingWrap}>
-      <div style={S.spinner} />
-      <p style={{ color: "#64748b", marginTop: 16 }}>Conectando con la base de datos...</p>
     </div>
   );
 
@@ -414,13 +402,12 @@ export default function App() {
         </div>
         <div style={S.headerRight}>
           <span style={S.userBadge}>{usuario}</span>
-          <button style={S.btnLogout} onClick={() => { sessionStorage.removeItem("pdp-usuario"); setUsuario(""); }}>Salir</button>
+          <button style={S.btnLogout} onClick={() => { sessionStorage.clear(); setUsuario(""); setAutenticado(false); }}>Salir</button>
         </div>
       </header>
 
       <main style={S.main}>
 
-        {/* ═══ LISTA ═══ */}
         {vista === "lista" && (<>
           <div style={S.statsRow}>
             {[
@@ -456,41 +443,23 @@ export default function App() {
           </div>
 
           {filtrados.length === 0 ? (
-            <div style={S.empty}>
-              <div style={{ fontSize: 48 }}>🏥</div>
-              <p style={{ color: "#94a3b8", marginTop: 8 }}>No hay pacientes con estos filtros.</p>
-            </div>
+            <div style={S.empty}><div style={{ fontSize: 48 }}>🏥</div><p style={{ color: "#94a3b8", marginTop: 8 }}>No hay pacientes con estos filtros.</p></div>
           ) : (
             <div style={S.tableWrap}>
               <table style={S.table}>
-                <thead>
-                  <tr>{["Paciente","Nº Historia","Edad","Cirugía","F. Cirugía","Estado","Cirujano","Pago",""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
-                </thead>
+                <thead><tr>{["Paciente","Nº Historia","Edad","Cirugía","F. Cirugía","Estado","Cirujano","Pago",""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
                 <tbody>
                   {filtrados.map(p => (
                     <tr key={p.id} style={S.tr}>
-                      <td style={S.td}>
-                        <div style={{ fontWeight: 700, color: "#1e293b" }}>{p.nombre} {p.apellidos}</div>
-                        <div style={{ fontSize: 12, color: "#94a3b8" }}>{p.telefono}</div>
-                      </td>
+                      <td style={S.td}><div style={{ fontWeight: 700, color: "#1e293b" }}>{p.nombre} {p.apellidos}</div><div style={{ fontSize: 12, color: "#94a3b8" }}>{p.telefono}</div></td>
                       <td style={S.td}><span style={S.mono}>{p.numHistoria || "—"}</span></td>
                       <td style={S.td}>{p.edad ? `${p.edad}a` : "—"}</td>
                       <td style={S.td}><span style={S.cirugiaBadge}>{p.cirugia}</span></td>
                       <td style={S.td}>{formatDate(p.fechaCirugia)}</td>
                       <td style={S.td}><span style={{ ...S.estadoBadge, ...estadoColor(p.estado) }}>{p.estado}</span></td>
                       <td style={S.td}><span style={S.cirujanoChip}>{p.creadoPor || "—"}</span></td>
-                      <td style={S.td}>
-                        <button style={{ ...S.pagoBadge, ...(p.pagado ? S.pagadoOn : S.pagadoOff) }} onClick={() => togglePago(p)}>
-                          {p.pagado ? "✓ Pagado" : "⏳ Pendiente"}
-                        </button>
-                      </td>
-                      <td style={S.td}>
-                        <div style={{ display: "flex", gap: 5 }}>
-                          <button style={S.btnIcon} onClick={() => handleVer(p)}>👁</button>
-                          <button style={S.btnIcon} onClick={() => handleEditar(p)}>✏️</button>
-                          <button style={S.btnIcon} onClick={() => setConfirmDelete(p.id)}>🗑</button>
-                        </div>
-                      </td>
+                      <td style={S.td}><button style={{ ...S.pagoBadge, ...(p.pagado ? S.pagadoOn : S.pagadoOff) }} onClick={() => togglePago(p)}>{p.pagado ? "✓ Pagado" : "⏳ Pendiente"}</button></td>
+                      <td style={S.td}><div style={{ display: "flex", gap: 5 }}><button style={S.btnIcon} onClick={() => handleVer(p)}>👁</button><button style={S.btnIcon} onClick={() => handleEditar(p)}>✏️</button><button style={S.btnIcon} onClick={() => setConfirmDelete(p.id)}>🗑</button></div></td>
                     </tr>
                   ))}
                 </tbody>
@@ -500,7 +469,6 @@ export default function App() {
           )}
         </>)}
 
-        {/* ═══ DETALLE ═══ */}
         {vista === "detalle" && selected && (
           <div style={S.formCard}>
             <div style={S.formHeader}>
@@ -522,24 +490,16 @@ export default function App() {
               <DetalleItem label="Total" value={selected.montoTotal ? `${selected.montoTotal} €` : null} />
               <DetalleItem label="Pagado" value={selected.montoPagado ? `${selected.montoPagado} €` : null} />
             </div>
-            {selected.notas && (
-              <div style={S.notasBox}>
-                <div style={S.notasLabel}>Notas clínicas</div>
-                <div style={S.notasText}>{selected.notas}</div>
-              </div>
-            )}
+            {selected.notas && <div style={S.notasBox}><div style={S.notasLabel}>Notas clínicas</div><div style={S.notasText}>{selected.notas}</div></div>}
             {(selected.adjuntos || []).length > 0 && (
               <div style={{ marginTop: 20 }}>
                 <div style={S.sectionTitle}>Documentos adjuntos</div>
-                <div style={S.adjuntosGrid}>
-                  {selected.adjuntos.map(a => <AdjuntoCard key={a.id} adj={a} onDownload={() => downloadAdjunto(a)} />)}
-                </div>
+                <div style={S.adjuntosGrid}>{selected.adjuntos.map(a => <AdjuntoCard key={a.id} adj={a} onDownload={() => downloadAdjunto(a)} />)}</div>
               </div>
             )}
           </div>
         )}
 
-        {/* ═══ FORMULARIO ═══ */}
         {isForm && (
           <div style={S.formCard}>
             <div style={S.formHeader}>
@@ -550,12 +510,9 @@ export default function App() {
             <div style={S.scanSection}>
               <div style={{ flex: 1 }}>
                 <div style={S.scanTitle}>📷 Escaneado automático desde foto</div>
-                <div style={S.scanDesc}>Haz una foto a la portada de la historia clínica y la IA extraerá los datos del paciente.</div>
+                <div style={S.scanDesc}>Haz una foto a la portada de la historia clínica y la IA extraerá los datos automáticamente.</div>
                 <input ref={scanRef} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" style={{ display: "none" }} onChange={handleScanFile} />
-                <button
-                  style={{ ...S.btnScan, opacity: scanState === "loading" ? 0.65 : 1, cursor: scanState === "loading" ? "wait" : "pointer" }}
-                  onClick={handleScanClick} disabled={scanState === "loading"}
-                >
+                <button style={{ ...S.btnScan, opacity: scanState === "loading" ? 0.65 : 1, cursor: scanState === "loading" ? "wait" : "pointer" }} onClick={handleScanClick} disabled={scanState === "loading"}>
                   {scanState === "loading" ? "⏳ Analizando..." : scanState === "done" ? "✓ Extraído — subir otra" : "📷 Subir foto de la historia"}
                 </button>
                 {scanState === "error" && <div style={S.scanMsg}>{scanError}</div>}
@@ -581,9 +538,7 @@ export default function App() {
                 <select style={S.input} value={form.cirugia} onChange={e => setForm({ ...form, cirugia: e.target.value })}>
                   <option value="">Seleccionar...</option>
                   {Object.entries(CIRUGIAS_GRUPOS).map(([grupo, items]) => (
-                    <optgroup key={grupo} label={`── ${grupo}`}>
-                      {items.map(c => <option key={c}>{c}</option>)}
-                    </optgroup>
+                    <optgroup key={grupo} label={`── ${grupo}`}>{items.map(c => <option key={c}>{c}</option>)}</optgroup>
                   ))}
                 </select>
               </div>
@@ -622,9 +577,7 @@ export default function App() {
             <input ref={adjuntoRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx" style={{ display: "none" }} onChange={handleAdjuntoFile} />
             <button style={S.btnAdjunto} onClick={handleAdjuntoClick}>📎 Adjuntar archivos (PDF, imágenes, Word...)</button>
             {(form.adjuntos || []).length > 0 && (
-              <div style={S.adjuntosGrid}>
-                {form.adjuntos.map(a => <AdjuntoCard key={a.id} adj={a} onDownload={() => downloadAdjunto(a)} onRemove={() => removeAdjunto(a.id)} />)}
-              </div>
+              <div style={S.adjuntosGrid}>{form.adjuntos.map(a => <AdjuntoCard key={a.id} adj={a} onDownload={() => downloadAdjunto(a)} onRemove={() => removeAdjunto(a.id)} />)}</div>
             )}
 
             <div style={S.formActions}>
@@ -639,9 +592,7 @@ export default function App() {
   );
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
 function SectionTitle({ children }) { return <div style={S.sectionTitle}>{children}</div>; }
-
 function DetalleItem({ label, value, accent }) {
   return (
     <div style={S.detalleItem}>
@@ -650,7 +601,6 @@ function DetalleItem({ label, value, accent }) {
     </div>
   );
 }
-
 function FormField({ label, value, onChange, type = "text", placeholder }) {
   return (
     <div style={S.fieldWrap}>
@@ -659,17 +609,13 @@ function FormField({ label, value, onChange, type = "text", placeholder }) {
     </div>
   );
 }
-
 function AdjuntoCard({ adj, onDownload, onRemove }) {
   const isImg = adj.tipo?.startsWith("image/");
   const icon = adj.tipo === "application/pdf" ? "📄" : isImg ? "🖼️" : "📎";
   return (
     <div style={S.adjuntoCard}>
       {isImg && <img src={adj.dataUrl} alt={adj.nombre} style={S.adjuntoThumb} />}
-      <div style={S.adjuntoInfo}>
-        <span style={S.adjuntoIcon}>{icon}</span>
-        <span style={S.adjuntoNombre} title={adj.nombre}>{adj.nombre}</span>
-      </div>
+      <div style={S.adjuntoInfo}><span style={S.adjuntoIcon}>{icon}</span><span style={S.adjuntoNombre} title={adj.nombre}>{adj.nombre}</span></div>
       <div style={{ display: "flex", gap: 4 }}>
         <button style={S.adjuntoBtn} onClick={onDownload}>⬇</button>
         {onRemove && <button style={{ ...S.adjuntoBtn, color: "#dc2626" }} onClick={onRemove}>✕</button>}
@@ -677,14 +623,12 @@ function AdjuntoCard({ adj, onDownload, onRemove }) {
     </div>
   );
 }
-
 function estadoColor(e) {
   return ({ "Pendiente fecha": { background: "#fef3c7", color: "#92400e" }, "Programado": { background: "#dbeafe", color: "#1e40af" }, "Operado": { background: "#dcfce7", color: "#166534" }, "Alta": { background: "#f0fdf4", color: "#15803d" } })[e] || {};
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
 const S = {
-  app: { minHeight: "100vh", background: "#f8fafc", fontFamily: "'Segoe UI',sans-serif" },
+  app: { minHeight: "100vh", background: "#f8fafc", fontFamily: "'DM Sans','Segoe UI',sans-serif" },
   loginWrap: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg,#e0e7ff 0%,#f0f9ff 100%)" },
   loginCard: { background: "#fff", borderRadius: 20, padding: "44px 40px", boxShadow: "0 20px 60px rgba(99,102,241,.15)", textAlign: "center", maxWidth: 420, width: "100%" },
   brand2: { display: "flex", alignItems: "center", gap: 14, justifyContent: "center", marginBottom: 28 },
@@ -692,10 +636,14 @@ const S = {
   brandTitle: { fontSize: 26, fontWeight: 900, color: "#1e293b", letterSpacing: "-0.5px", textAlign: "left" },
   brandSub: { fontSize: 13, color: "#6366f1", fontWeight: 600, textAlign: "left" },
   loginLabel: { fontWeight: 600, color: "#475569", marginBottom: 16 },
+  passwordWrap: { display: "flex", gap: 8, marginBottom: 8 },
+  passwordInput: { flex: 1, padding: "10px 14px", border: "1.5px solid #e2e8f0", borderRadius: 9, fontSize: 15, outline: "none", letterSpacing: "0.1em" },
+  eyeBtn: { padding: "8px 12px", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 9, cursor: "pointer", fontSize: 16 },
+  passwordError: { color: "#ef4444", fontSize: 13, fontWeight: 600, marginBottom: 10 },
+  btnAcceder: { width: "100%", padding: "11px", background: "#6366f1", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 15, cursor: "pointer", marginTop: 4 },
+  btnSalirPass: { marginTop: 20, background: "none", border: "none", color: "#94a3b8", fontSize: 12, cursor: "pointer" },
   usuarioGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   usuarioBtn: { padding: "18px 10px", border: "2px solid #e2e8f0", borderRadius: 12, background: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 8 },
-  loadingWrap: { minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" },
-  spinner: { width: 36, height: 36, border: "3px solid #e2e8f0", borderTop: "3px solid #6366f1", borderRadius: "50%", animation: "spin .8s linear infinite" },
   header: { background: "#fff", borderBottom: "1px solid #e2e8f0", padding: "0 24px", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 10 },
   headerLeft: { display: "flex", alignItems: "center", gap: 10 },
   brandH: { fontWeight: 900, fontSize: 18, color: "#1e293b", letterSpacing: "-0.4px" },
