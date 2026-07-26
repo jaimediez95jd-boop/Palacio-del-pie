@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import * as XLSX from "xlsx";
 
 // ── Firebase config ───────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -59,13 +60,24 @@ async function extractFromImage(base64Data, mediaType) {
   return JSON.parse(raw.replace(/^```json\s*/i,"").replace(/^```\s*/i,"").replace(/```\s*$/i,"").trim());
 }
 
-function exportCSV(pacientes) {
+function exportExcel(pacientes) {
   const headers = ["Nombre","Apellidos","Nº Historia","Edad","Teléfono","Email","Cirugía","Código","Fecha Cirugía","Estado","Pagado","Total (€)","Pagado (€)","Cirujano","Notas"];
-  const rows = pacientes.map(p => [p.nombre,p.apellidos,p.numHistoria,p.edad,p.telefono,p.email,p.cirugia,p.codigoCirugia,p.fechaCirugia?formatDate(p.fechaCirugia):"",p.estado,p.pagado?"Sí":"No",p.montoTotal,p.montoPagado,p.creadoPor,(p.notas||"").replace(/\n/g," ")]);
-  const csv = [headers,...rows].map(r=>r.map(c=>`"${String(c??"").replace(/"/g,'""')}"`).join(",")).join("\n");
-  const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a"); a.href=url; a.download=`palacio-del-pie-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+  const rows = pacientes.map(p => [
+    p.nombre||"", p.apellidos||"", p.numHistoria||"",
+    p.edad ? Number(p.edad) : "",
+    p.telefono||"", p.email||"",
+    p.cirugia||"", p.codigoCirugia||"",
+    p.fechaCirugia ? formatDate(p.fechaCirugia) : "",
+    p.estado||"", p.pagado?"Sí":"No",
+    p.montoTotal ? Number(p.montoTotal) : "",
+    p.montoPagado ? Number(p.montoPagado) : "",
+    p.creadoPor||"", (p.notas||"").replace(/\n/g," ")
+  ]);
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws["!cols"] = [{wch:15},{wch:20},{wch:13},{wch:6},{wch:14},{wch:26},{wch:36},{wch:16},{wch:14},{wch:14},{wch:8},{wch:10},{wch:10},{wch:20},{wch:40}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Pacientes");
+  XLSX.writeFile(wb, `palacio-del-pie-${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
 export default function App() {
@@ -82,6 +94,7 @@ export default function App() {
   const [filtroPago, setFiltroPago] = useState("todos");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [filtroCirujano, setFiltroCirujano] = useState("todos");
+  const [filtroMes, setFiltroMes] = useState("todos");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
@@ -181,10 +194,11 @@ export default function App() {
 
   const filtrados = pacientes.filter(p => {
     const txt = `${p.nombre} ${p.apellidos} ${p.numHistoria} ${p.codigoCirugia} ${p.cirugia}`.toLowerCase();
-    return txt.includes(filtro.toLowerCase()) && (filtroPago==="todos"||(filtroPago==="pagado"?p.pagado:!p.pagado)) && (filtroEstado==="todos"||p.estado===filtroEstado) && (filtroCirujano==="todos"||p.creadoPor===filtroCirujano);
+    return txt.includes(filtro.toLowerCase()) && (filtroPago==="todos"||(filtroPago==="pagado"?p.pagado:!p.pagado)) && (filtroEstado==="todos"||p.estado===filtroEstado) && (filtroCirujano==="todos"||p.creadoPor===filtroCirujano) && (filtroMes==="todos"||(p.fechaCirugia&&p.fechaCirugia.slice(0,7)===filtroMes));
   });
 
   const stats = { total: pacientes.length, programados: pacientes.filter(p=>p.estado==="Programado").length, operados: pacientes.filter(p=>p.estado==="Operado"||p.estado==="Alta").length, pendientesPago: pacientes.filter(p=>!p.pagado).length };
+  const mesesDisponibles = [...new Set(pacientes.filter(p=>p.fechaCirugia).map(p=>p.fechaCirugia.slice(0,7)))].sort().reverse();
 
   // ── PANTALLA CONTRASEÑA ───────────────────────────────────────────────────
   if (!autenticado) return (
@@ -242,7 +256,8 @@ export default function App() {
             <select style={S.select} value={filtroCirujano} onChange={e=>setFiltroCirujano(e.target.value)}><option value="todos">Todos los cirujanos</option>{CIRUJANOS.map(c=><option key={c}>{c}</option>)}</select>
             <select style={S.select} value={filtroEstado} onChange={e=>setFiltroEstado(e.target.value)}><option value="todos">Todos los estados</option>{ESTADOS.map(e=><option key={e}>{e}</option>)}</select>
             <select style={S.select} value={filtroPago} onChange={e=>setFiltroPago(e.target.value)}><option value="todos">Todos los pagos</option><option value="pagado">Pagados</option><option value="pendiente">Pago pendiente</option></select>
-            <button style={S.btnExport} onClick={()=>exportCSV(filtrados)}>⬇ Exportar</button>
+            <select style={S.select} value={filtroMes} onChange={e=>setFiltroMes(e.target.value)}><option value="todos">Todos los meses</option>{mesesDisponibles.map(m=>{const[y,mo]=m.split("-");const lbl=new Date(+y,+mo-1,1).toLocaleDateString("es-ES",{month:"long",year:"numeric"});return<option key={m} value={m}>{lbl.charAt(0).toUpperCase()+lbl.slice(1)}</option>;})}</select>
+            <button style={S.btnExport} onClick={()=>exportExcel(filtrados)}>⬇ Exportar Excel</button>
             <button style={S.btnPrimary} onClick={handleNuevo}>+ Nuevo paciente</button>
           </div>
           {filtrados.length===0 ? (<div style={S.empty}><div style={{fontSize:48}}>🏥</div><p style={{color:"#94a3b8",marginTop:8}}>No hay pacientes con estos filtros.</p></div>) : (
