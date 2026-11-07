@@ -96,6 +96,8 @@ export default function App() {
   const [filtroCirujano, setFiltroCirujano] = useState("todos");
   const [filtroMes, setFiltroMes] = useState("todos");
   const [filtroFecha, setFiltroFecha] = useState("todos");
+  const [vistaParteQx, setVistaParteQx] = useState(false);
+  const [parteRows, setParteRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
@@ -202,6 +204,29 @@ export default function App() {
   const mesesDisponibles = [...new Set(pacientes.filter(p=>p.fechaCirugia).map(p=>p.fechaCirugia.slice(0,7)))].sort().reverse();
   const fechasDisponibles = [...new Set(pacientes.filter(p=>p.fechaCirugia).map(p=>p.fechaCirugia.slice(0,10)))].sort().reverse();
 
+  function handleAbrirParte() {
+    setParteRows(filtrados.map(p => ({
+      id: p.id, paciente: `${p.nombre} ${p.apellidos}`,
+      edad: p.edad||"", numHistoria: p.numHistoria||"",
+      intervencion: p.cirugia||"", lateralidad: "", anestesia: "",
+      material: "", observaciones: p.notas||"",
+      cirujano: p.creadoPor||"", fecha: p.fechaCirugia||"",
+    })));
+    setVistaParteQx(true);
+  }
+  function updateParteRow(id, field, value) {
+    setParteRows(rows => rows.map(r => r.id===id ? {...r,[field]:value} : r));
+  }
+  function imprimirParte() {
+    const r0 = parteRows[0];
+    const fechaDisplay = r0?.fecha ? (()=>{const[y,m,d]=r0.fecha.split("-");return new Date(+y,+m-1,+d).toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long",year:"numeric"});})() : "";
+    const filas = parteRows.map((r,i)=>`<tr><td style="text-align:center;font-weight:bold;padding:8px;">${i+1}</td><td style="padding:8px;"><strong>${r.paciente}</strong><br/><small style="color:#666;">${r.edad?r.edad+" años":""}${r.numHistoria?" · Hª "+r.numHistoria:""}</small></td><td style="padding:8px;">${(r.intervencion||"").replace(/\n/g,"<br/>")}</td><td style="text-align:center;padding:8px;">${r.lateralidad||""}</td><td style="text-align:center;padding:8px;">${r.anestesia||""}</td><td style="padding:8px;">${(r.material||"").replace(/\n/g,"<br/>")}</td><td style="padding:8px;">${(r.observaciones||"").replace(/\n/g,"<br/>")}</td><td style="padding:8px;">${r.cirujano||""}</td></tr>`).join("");
+    const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Parte Quirúrgico — ${fechaDisplay}</title><style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,sans-serif;font-size:11px;color:#111;padding:24px;}h1{font-size:17px;font-weight:bold;margin-bottom:3px;}.sub{color:#6366f1;font-size:12px;font-weight:600;margin-bottom:18px;text-transform:capitalize;}table{width:100%;border-collapse:collapse;}th{background:#1e293b;color:#fff;padding:8px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.05em;}td{border-bottom:1px solid #e2e8f0;vertical-align:top;}tr:nth-child(even) td{background:#f8fafc;}.firmas{margin-top:48px;display:flex;gap:80px;}.firma{border-top:1.5px solid #333;width:200px;padding-top:7px;font-size:10px;color:#555;text-align:center;}@media print{.no-print{display:none;}}</style></head><body><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;"><div><h1>🦶 Palacio del Pie — Parte Quirúrgico</h1><div class="sub">${fechaDisplay}</div></div><button class="no-print" onclick="window.print()" style="padding:9px 20px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-weight:bold;cursor:pointer;font-size:13px;">Imprimir / Guardar PDF</button></div><table><thead><tr><th style="width:30px;">Nº</th><th style="width:155px;">Paciente</th><th>Intervención</th><th style="width:70px;">Lateral.</th><th style="width:80px;">Anestesia</th><th style="width:155px;">Material</th><th>Observaciones</th><th style="width:120px;">Cirujano</th></tr></thead><tbody>${filas}</tbody></table><div class="firmas"><div class="firma">Firma cirujano/a</div><div class="firma">Firma anestesista</div></div></body></html>`;
+    const win = window.open("","_blank");
+    if (!win) { showToast("Permite ventanas emergentes para imprimir","error"); return; }
+    win.document.write(html); win.document.close();
+  }
+
   // ── PANTALLA CONTRASEÑA ───────────────────────────────────────────────────
   if (!autenticado) return (
     <div style={S.loginWrap}>
@@ -241,6 +266,56 @@ export default function App() {
       {toast && <div style={{...S.toast,background:toast.type==="error"?"#ef4444":"#10b981"}}>{toast.msg}</div>}
       {confirmDelete && (<div style={S.overlay}><div style={S.confirmCard}><p style={{fontWeight:700,fontSize:16,marginBottom:6}}>¿Eliminar este paciente?</p><p style={{color:"#64748b",fontSize:14,marginBottom:22}}>Esta acción no se puede deshacer.</p><div style={{display:"flex",gap:10}}><button style={S.btnDanger} onClick={()=>handleDelete(confirmDelete)}>Eliminar</button><button style={S.btnSecondary} onClick={()=>setConfirmDelete(null)}>Cancelar</button></div></div></div>)}
 
+      {vistaParteQx && (
+        <div style={S.parteOverlay}>
+          <div style={S.parteCard}>
+            <div style={S.parteHeader}>
+              <div>
+                <div style={S.parteTitle}>📋 Parte Quirúrgico</div>
+                <div style={S.parteSubtitle}>{parteRows[0]?.fecha?(()=>{const[y,m,d]=parteRows[0].fecha.split("-");return new Date(+y,+m-1,+d).toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long",year:"numeric"});})():""}</div>
+              </div>
+              <div style={{display:"flex",gap:8,flexShrink:0}}>
+                <button style={S.btnParte} onClick={imprimirParte}>🖨 Generar PDF</button>
+                <button style={S.btnSecondary} onClick={()=>setVistaParteQx(false)}>✕ Cerrar</button>
+              </div>
+            </div>
+            <div style={{overflowX:"auto"}}>
+              <table style={S.table}>
+                <thead><tr>{["Nº","Paciente","Intervención","Lateralidad","Anestesia","Material / Implantes","Observaciones / Alergias","Cirujano"].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {parteRows.map((r,i)=>(
+                    <tr key={r.id} style={S.tr}>
+                      <td style={{...S.td,width:36,textAlign:"center",fontWeight:800,color:"#6366f1"}}>{i+1}</td>
+                      <td style={{...S.td,minWidth:155}}>
+                        <div style={{fontWeight:700,color:"#1e293b",fontSize:13}}>{r.paciente}</div>
+                        <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{r.edad?`${r.edad} años`:""}{r.numHistoria?` · Hª ${r.numHistoria}`:""}</div>
+                      </td>
+                      <td style={{...S.td,minWidth:180}}><textarea style={S.parteInput} value={r.intervencion} onChange={e=>updateParteRow(r.id,"intervencion",e.target.value)} rows={2}/></td>
+                      <td style={{...S.td,minWidth:100}}>
+                        <select style={S.parteSelect} value={r.lateralidad} onChange={e=>updateParteRow(r.id,"lateralidad",e.target.value)}>
+                          <option value="">—</option>
+                          <option>Derecho</option><option>Izquierdo</option><option>Bilateral</option>
+                        </select>
+                      </td>
+                      <td style={{...S.td,minWidth:110}}>
+                        <select style={S.parteSelect} value={r.anestesia} onChange={e=>updateParteRow(r.id,"anestesia",e.target.value)}>
+                          <option value="">—</option>
+                          <option>Local</option><option>Sedación</option><option>Raquídea</option><option>General</option>
+                        </select>
+                      </td>
+                      <td style={{...S.td,minWidth:165}}><textarea style={S.parteInput} value={r.material} onChange={e=>updateParteRow(r.id,"material",e.target.value)} rows={2} placeholder="Material, implantes..."/></td>
+                      <td style={{...S.td,minWidth:180}}><textarea style={S.parteInput} value={r.observaciones} onChange={e=>updateParteRow(r.id,"observaciones",e.target.value)} rows={2} placeholder="Alergias, observaciones..."/></td>
+                      <td style={{...S.td,minWidth:120,fontSize:12,color:"#475569"}}>{r.cirujano||"—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{paddingTop:10,fontSize:12,color:"#94a3b8"}}>{parteRows.length} paciente{parteRows.length!==1?"s":""} · Los cambios solo afectan al parte impreso, no a la base de datos.</div>
+          </div>
+        </div>
+      )}
+
       <header style={S.header}>
         <div style={S.headerLeft}><span style={{fontSize:22}}>🦶</span><span style={S.brandH}>Palacio del Pie</span>{saving&&<span style={S.savingBadge}>Guardando...</span>}</div>
         <div style={S.headerRight}><span style={S.userBadge}>{usuario}</span><button style={S.btnLogout} onClick={()=>setUsuario("")}>Salir</button></div>
@@ -259,8 +334,10 @@ export default function App() {
             <select style={S.select} value={filtroEstado} onChange={e=>setFiltroEstado(e.target.value)}><option value="todos">Todos los estados</option>{ESTADOS.map(e=><option key={e}>{e}</option>)}</select>
             <select style={S.select} value={filtroPago} onChange={e=>setFiltroPago(e.target.value)}><option value="todos">Todos los pagos</option><option value="pagado">Pagados</option><option value="pendiente">Pago pendiente</option></select>
             <select style={S.select} value={filtroMes} onChange={e=>{setFiltroMes(e.target.value);setFiltroFecha("todos");}}><option value="todos">Todos los meses</option>{mesesDisponibles.map(m=>{const[y,mo]=m.split("-");const lbl=new Date(+y,+mo-1,1).toLocaleDateString("es-ES",{month:"long",year:"numeric"});return<option key={m} value={m}>{lbl.charAt(0).toUpperCase()+lbl.slice(1)}</option>;})}</select>
-            <select style={S.select} value={filtroFecha} onChange={e=>{setFiltroFecha(e.target.value);setFiltroMes("todos");}}><option value="todos">Todas las fechas</option>{fechasDisponibles.map(f=>{const[y,m,d]=f.split("-");const lbl=new Date(+y,+m-1,+d).toLocaleDateString("es-ES",{day:"numeric",month:"long",year:"numeric"});return<option key={f} value={f}>{lbl.charAt(0).toUpperCase()+lbl.slice(1)}</option>;})}</select>
+            <input style={{...S.select,cursor:"pointer"}} type="date" value={filtroFecha==="todos"?"":filtroFecha} onChange={e=>{setFiltroFecha(e.target.value||"todos");setFiltroMes("todos");}} title="Filtrar por fecha exacta"/>
+            {filtroFecha!=="todos"&&<button style={{padding:"8px 10px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:9,fontWeight:700,fontSize:12,cursor:"pointer"}} onClick={()=>setFiltroFecha("todos")} title="Quitar filtro de fecha">✕</button>}
             <button style={S.btnExport} onClick={()=>exportExcel(filtrados)}>⬇ Exportar Excel</button>
+            <button style={S.btnParte} onClick={handleAbrirParte} disabled={filtrados.length===0} title="Generar parte quirúrgico con los pacientes filtrados">📋 Parte quirúrgico</button>
             <button style={S.btnPrimary} onClick={handleNuevo}>+ Nuevo paciente</button>
           </div>
           {filtrados.length===0 ? (<div style={S.empty}><div style={{fontSize:48}}>🏥</div><p style={{color:"#94a3b8",marginTop:8}}>No hay pacientes con estos filtros.</p></div>) : (
@@ -435,6 +512,14 @@ const S = {
   adjuntoNombre:{fontSize:12,color:"#334155",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"},
   adjuntoBtn:{padding:"3px 7px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,cursor:"pointer",fontSize:12,flexShrink:0},
   formActions:{display:"flex",gap:10,marginTop:28,flexWrap:"wrap"},
+  btnParte:{padding:"8px 16px",background:"#f0f9ff",color:"#0369a1",border:"1.5px solid #bae6fd",borderRadius:9,fontWeight:700,fontSize:13,cursor:"pointer"},
+  parteOverlay:{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:100,overflowY:"auto",padding:"20px 16px"},
+  parteCard:{background:"#fff",borderRadius:16,padding:"24px",width:"100%",maxWidth:1300,boxShadow:"0 25px 70px rgba(0,0,0,.3)",marginBottom:20},
+  parteHeader:{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:18,gap:16},
+  parteTitle:{fontSize:20,fontWeight:800,color:"#1e293b"},
+  parteSubtitle:{fontSize:13,color:"#6366f1",fontWeight:600,textTransform:"capitalize",marginTop:3},
+  parteInput:{width:"100%",padding:"5px 7px",border:"1.5px solid #e2e8f0",borderRadius:6,fontSize:12,resize:"vertical",fontFamily:"inherit",background:"#fafafa",boxSizing:"border-box"},
+  parteSelect:{width:"100%",padding:"6px 7px",border:"1.5px solid #e2e8f0",borderRadius:6,fontSize:12,background:"#fafafa"},
   detalleGrid:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:12,marginBottom:18},
   detalleItem:{padding:"11px 13px",background:"#f8fafc",borderRadius:9},
   detalleLabel:{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:".06em",marginBottom:3},
