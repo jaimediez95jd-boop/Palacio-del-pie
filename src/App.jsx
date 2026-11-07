@@ -95,6 +95,7 @@ export default function App() {
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [filtroCirujano, setFiltroCirujano] = useState("todos");
   const [filtroMes, setFiltroMes] = useState("todos");
+  const [filtroFecha, setFiltroFecha] = useState("todos");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
@@ -194,11 +195,12 @@ export default function App() {
 
   const filtrados = pacientes.filter(p => {
     const txt = `${p.nombre} ${p.apellidos} ${p.numHistoria} ${p.codigoCirugia} ${p.cirugia}`.toLowerCase();
-    return txt.includes(filtro.toLowerCase()) && (filtroPago==="todos"||(filtroPago==="pagado"?p.pagado:!p.pagado)) && (filtroEstado==="todos"||p.estado===filtroEstado) && (filtroCirujano==="todos"||p.creadoPor===filtroCirujano) && (filtroMes==="todos"||(p.fechaCirugia&&p.fechaCirugia.slice(0,7)===filtroMes));
+    return txt.includes(filtro.toLowerCase()) && (filtroPago==="todos"||(filtroPago==="pagado"?p.pagado:!p.pagado)) && (filtroEstado==="todos"||p.estado===filtroEstado) && (filtroCirujano==="todos"||p.creadoPor===filtroCirujano) && (filtroMes==="todos"||(p.fechaCirugia&&p.fechaCirugia.slice(0,7)===filtroMes)) && (filtroFecha==="todos"||(p.fechaCirugia&&p.fechaCirugia.slice(0,10)===filtroFecha));
   });
 
   const stats = { total: pacientes.length, programados: pacientes.filter(p=>p.estado==="Programado").length, operados: pacientes.filter(p=>p.estado==="Operado"||p.estado==="Alta").length, pendientesPago: pacientes.filter(p=>!p.pagado).length };
   const mesesDisponibles = [...new Set(pacientes.filter(p=>p.fechaCirugia).map(p=>p.fechaCirugia.slice(0,7)))].sort().reverse();
+  const fechasDisponibles = [...new Set(pacientes.filter(p=>p.fechaCirugia).map(p=>p.fechaCirugia.slice(0,10)))].sort().reverse();
 
   // ── PANTALLA CONTRASEÑA ───────────────────────────────────────────────────
   if (!autenticado) return (
@@ -256,7 +258,8 @@ export default function App() {
             <select style={S.select} value={filtroCirujano} onChange={e=>setFiltroCirujano(e.target.value)}><option value="todos">Todos los cirujanos</option>{CIRUJANOS.map(c=><option key={c}>{c}</option>)}</select>
             <select style={S.select} value={filtroEstado} onChange={e=>setFiltroEstado(e.target.value)}><option value="todos">Todos los estados</option>{ESTADOS.map(e=><option key={e}>{e}</option>)}</select>
             <select style={S.select} value={filtroPago} onChange={e=>setFiltroPago(e.target.value)}><option value="todos">Todos los pagos</option><option value="pagado">Pagados</option><option value="pendiente">Pago pendiente</option></select>
-            <select style={S.select} value={filtroMes} onChange={e=>setFiltroMes(e.target.value)}><option value="todos">Todos los meses</option>{mesesDisponibles.map(m=>{const[y,mo]=m.split("-");const lbl=new Date(+y,+mo-1,1).toLocaleDateString("es-ES",{month:"long",year:"numeric"});return<option key={m} value={m}>{lbl.charAt(0).toUpperCase()+lbl.slice(1)}</option>;})}</select>
+            <select style={S.select} value={filtroMes} onChange={e=>{setFiltroMes(e.target.value);setFiltroFecha("todos");}}><option value="todos">Todos los meses</option>{mesesDisponibles.map(m=>{const[y,mo]=m.split("-");const lbl=new Date(+y,+mo-1,1).toLocaleDateString("es-ES",{month:"long",year:"numeric"});return<option key={m} value={m}>{lbl.charAt(0).toUpperCase()+lbl.slice(1)}</option>;})}</select>
+            <select style={S.select} value={filtroFecha} onChange={e=>{setFiltroFecha(e.target.value);setFiltroMes("todos");}}><option value="todos">Todas las fechas</option>{fechasDisponibles.map(f=>{const[y,m,d]=f.split("-");const lbl=new Date(+y,+m-1,+d).toLocaleDateString("es-ES",{day:"numeric",month:"long",year:"numeric"});return<option key={f} value={f}>{lbl.charAt(0).toUpperCase()+lbl.slice(1)}</option>;})}</select>
             <button style={S.btnExport} onClick={()=>exportExcel(filtrados)}>⬇ Exportar Excel</button>
             <button style={S.btnPrimary} onClick={handleNuevo}>+ Nuevo paciente</button>
           </div>
